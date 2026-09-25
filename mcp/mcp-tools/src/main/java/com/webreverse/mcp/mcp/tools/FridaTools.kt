@@ -33,9 +33,10 @@ object FridaTools {
     fun all(deps: ToolDependencies): List<McpTool> {
         val f = ToolFactory(deps)
 
-        fun runRoot(command: String, timeoutMs: Long = 90_000): Triple<String, String, Int> {
-            // 用 su 执行命令；su 不可用则直接 sh 执行（非 root 降级）
-            val su = if (File("/system/bin/su").exists() || File("/sbin/su").exists() || File("/system/xbin/su").exists()) {
+        fun runRoot(command: String, timeoutMs: Long = 90_000, preferRoot: Boolean = true): Triple<String, String, Int> {
+            // 用 su 执行命令；不检测文件存在性（Magisk 新版本 su 无独立文件），
+            // 而是直接尝试 su -c，失败/超时则回退 sh 非 root 执行。
+            val su = if (preferRoot) {
                 listOf("su", "-c", command)
             } else {
                 listOf("/system/bin/sh", "-c", command)
@@ -73,7 +74,10 @@ object FridaTools {
                     val (o, _, code) = runRoot("id", 10_000)
                     code == 0 && o.contains("uid=0")
                 }
-                val fridaBinExists = File(FRIDA_SERVER_BIN).exists()
+                val fridaBinExists = withContext(Dispatchers.IO) {
+                    val (o, _, _) = runRoot("ls -l $FRIDA_SERVER_BIN 2>&1", 10_000)
+                    o.contains(FRIDA_SERVER_BIN) && !o.contains("No such file")
+                }
                 val fridaRunning = withContext(Dispatchers.IO) {
                     val (o, _, _) = runRoot("ps -A | grep frida", 10_000)
                     o.contains("frida")
