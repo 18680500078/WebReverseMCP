@@ -1,5 +1,8 @@
 pluginManagement {
     repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
         maven {
             setUrl("https://maven.aliyun.com/repository/public")
         }
@@ -15,9 +18,6 @@ pluginManagement {
         maven {
             setUrl("https://jitpack.io")
         }
-        google()
-        mavenCentral()
-        gradlePluginPortal()
     }
 }
 
