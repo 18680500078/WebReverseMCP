@@ -68,6 +68,10 @@ object ToolModule {
         registry.registerAll(FileTools.all(deps))
         registry.registerAll(McpTools.all(deps))
         registry.registerAll(SystemTools.all(deps))
+        // 逆向成果导出（数据闭环）：report.export 一键落盘 Markdown/JSON 报告
+        registry.registerAll(ReportExportTools.all(deps))
+        // Frida 原生层/SSL 层动态 hook（root）：frida.status/list/hook/ssl_unpin/install_server
+        registry.registerAll(FridaTools.all(deps))
         // 内置终端 + Host Tools 管理（terminal.exec / run_python / install ...）
         registry.registerAll(com.webreverse.mcp.mcp.tools.terminal.TerminalTools.all(deps))
         // 用户脚本管理（user_script.create / list / get / update / delete / set_enabled）
