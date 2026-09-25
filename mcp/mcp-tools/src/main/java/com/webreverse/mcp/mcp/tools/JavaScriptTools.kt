@@ -689,6 +689,9 @@ object JavaScriptTools {
                     removeDebugger = ToolArgs.bool(args, "removeDebugger", false),
                 )
                 val maxChars = ToolArgs.int(args, "maxChars", 200_000)
+                // 控制流平坦化检测：识别 obfuscator.io 常见的 while(true){switch(状态变量)} 分发循环
+                val cffDetected = Regex("""while\s*\(\s*(?:!!\[\]|!0|true|[a-zA-Z_$][\w$]*)\s*\)\s*\{\s*switch\s*\(""").containsMatchIn(deob.code) ||
+                    Regex("""switch\s*\(\s*[a-zA-Z_$][\w$]*\s*\)\s*\{\s*case\s*['"]""").containsMatchIn(deob.code)
                 McpToolResult.json(
                     buildJsonObject {
                         put("originalLength", JsonPrimitive(source.length))
@@ -696,8 +699,15 @@ object JavaScriptTools {
                         put("stringsDecrypted", JsonPrimitive(deob.stringCallsDecrypted))
                         put("stringsFolded", JsonPrimitive(deob.stringsFolded))
                         put("noiseRemoved", JsonPrimitive(deob.debuggerRemoved))
+                        put("controlFlowFlat", JsonPrimitive(cffDetected))
                         put("notes", JsonPrimitive(deob.notes.joinToString("; ").take(500)))
                         put("code", JsonPrimitive(deob.code.take(maxChars)))
+                        put(
+                            "hint",
+                            JsonPrimitive(
+                                if (cffDetected) "检测到疑似控制流平坦化（switch 分发循环）。字符串已还原，但控制流仍被摊平——可结合 debugger 单步追踪状态变量还原执行顺序。" else "",
+                            ),
+                        )
                     },
                 )
             },

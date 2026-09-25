@@ -72,6 +72,14 @@ object ToolModule {
         registry.registerAll(ReportExportTools.all(deps))
         // Frida 原生层/SSL 层动态 hook（root）：frida.status/list/hook/ssl_unpin/install_server
         registry.registerAll(FridaTools.all(deps))
+        // 网页渗透工具集（JWT 解析/伪造 + 接口参数重放/越权探测）
+        registry.registerAll(WebPentestTools.all(deps))
+        // 逆向案例导出与复现（case.export）
+        registry.registerAll(CaseTools.all(deps))
+        // 浏览器指纹反检测（fingerprint.status / fingerprint.noise）
+        registry.registerAll(FingerprintTools.all(deps))
+        // root 级流量抓取与透明代理（traffic.capture / proxy / clear）
+        registry.registerAll(TrafficTools.all(deps))
         // 内置终端 + Host Tools 管理（terminal.exec / run_python / install ...）
         registry.registerAll(com.webreverse.mcp.mcp.tools.terminal.TerminalTools.all(deps))
         // 用户脚本管理（user_script.create / list / get / update / delete / set_enabled）
