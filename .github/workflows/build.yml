@@ -23,6 +23,9 @@ jobs:
           yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
           ls /usr/local/lib/android/sdk/
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Grant gradlew permission
         run: chmod +x gradlew
 
@@ -37,3 +40,4 @@ jobs:
         with:
           name: WebReverseMCP-apk
           path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
