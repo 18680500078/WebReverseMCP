@@ -178,7 +178,7 @@ object FridaTools {
                                 getAcceptedIssuers: function () { return []; }
                             }
                         });
-                        var trustManager = TrustManager.\$new();
+                        var trustManager = TrustManager.${'$'}new();
                         SSLContext.init.overload('[Ljavax.net.ssl.KeyManager;', '[Ljavax.net.ssl.TrustManager;', 'java.security.SecureRandom').implementation = function (km, tm, sr) {
                             this.init(km, [trustManager], sr);
                         };
