@@ -130,6 +130,44 @@ object TerminalTools {
                 )
             },
 
+            // ---------- 受控 root 终端（绕过沙箱，仅供授权场景） ----------
+            f.tool(
+                "terminal.su",
+                "以 root 权限执行 shell 命令（通过 Magisk su）。用于 terminal.exec 沙箱禁止的 root 操作：读取/写入系统分区、启动 frida-server、挂载、抓取系统级信息等。高危工具：仅在自己拥有/已授权的设备与目标上使用。未授予 root 时返回明确错误并给出指引。",
+                ToolCategory.SYSTEM,
+                PermissionScope.EXECUTE_JS,
+                RiskLevel.CRITICAL,
+                timeoutMs = 180_000,
+                inputSchema = Schemas.objectSchema(
+                    "command" to Schemas.strSchema("要以 root 执行的 shell 命令（如 \"id\"、\"/data/local/tmp/frida-server &\"、\"chmod +x /data/local/tmp/frida-server\"）"),
+                    "timeoutMs" to Schemas.intSchema("超时毫秒（默认 60000，最大 300000）"),
+                ),
+            ) { args ->
+                val command = ToolArgs.str(args, "command")
+                if (command.isBlank()) return@tool McpToolResult.error("INVALID_ARGUMENTS", "command 不能为空")
+                val timeout = ToolArgs.long(args, "timeoutMs", 60_000L).coerceIn(5_000L, 300_000L)
+                if (!RootExecutor.isRootAvailable(10_000)) {
+                    return@tool McpToolResult.error(
+                        "ROOT_UNAVAILABLE",
+                        "root(su) 不可用。请确认 Magisk 已安装并在设置页「Root 权限」中点「拉起授权」，授权本应用后重试。",
+                    )
+                }
+                val result = withContext(Dispatchers.IO) {
+                    RootExecutor.runSu(command, timeout)
+                }
+                if (result == null) {
+                    return@tool McpToolResult.error("ROOT_EXEC_FAILED", "root 命令执行失败（su 调用异常）")
+                }
+                McpToolResult.json(
+                    buildJsonObject {
+                        put("command", JsonPrimitive(command))
+                        put("exitCode", JsonPrimitive(result.second))
+                        put("output", JsonPrimitive(result.first.take(200_000)))
+                        put("root", JsonPrimitive(true))
+                    },
+                )
+            },
+
             // ---------- 终端沙箱策略 ----------
             f.tool(
                 "terminal.sandbox", "终端沙箱策略查询：预览任意命令是否会被沙箱放行/拦截，或列出策略摘要。" +

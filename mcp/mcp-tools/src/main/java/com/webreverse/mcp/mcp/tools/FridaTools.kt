@@ -12,7 +12,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * Frida Tools：通过 root(su) 驱动 Frida 做原生层 / SSL 层动态 hook。
@@ -33,66 +32,11 @@ object FridaTools {
     fun all(deps: ToolDependencies): List<McpTool> {
         val f = ToolFactory(deps)
 
-        // Magisk 新版本 su 无独立物理文件，且 app 进程 PATH 里往往没有 su，
-        // 需依次尝试多个已知路径；全部失败再回退非 root sh。
-        val SU_CANDIDATES = listOf(
-            "/data/adb/magisk/busybox",
-            "/sbin/su",
-            "/system/bin/su",
-            "/system/xbin/su",
-            "/su/bin/su",
-            "su",
-        )
-
-        fun trySu(command: String, timeoutMs: Long): Triple<String, String, Int>? {
-            for (suPath in SU_CANDIDATES) {
-                val p = try {
-                    ProcessBuilder(suPath, "-c", command).redirectErrorStream(true).start()
-                } catch (_: Exception) {
-                    continue
-                }
-                val out = StringBuilder()
-                val reader = p.inputStream.bufferedReader()
-                val t = Thread {
-                    try {
-                        while (true) {
-                            val line = reader.readLine() ?: break
-                            if (out.length < 64 * 1024) out.append(line).append('\n')
-                        }
-                    } catch (_: Exception) {
-                    }
-                }
-                t.start()
-                val done = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-                if (!done) { p.destroyForcibly(); t.join(500); continue }
-                t.join(500)
-                return Triple(out.toString(), "", p.exitValue())
-            }
-            return null
-        }
-
-        fun runRoot(command: String, timeoutMs: Long = 90_000, preferRoot: Boolean = true): Triple<String, String, Int> {
-            // 先尝试 root(su)，失败/不可用则回退非 root sh
-            if (preferRoot) {
-                trySu(command, timeoutMs)?.let { return it }
-            }
-            val p = ProcessBuilder("/system/bin/sh", "-c", command).redirectErrorStream(true).start()
-            val out = StringBuilder()
-            val t = Thread {
-                try {
-                    val r = p.inputStream.bufferedReader()
-                    while (true) {
-                        val line = r.readLine() ?: break
-                        if (out.length < 64 * 1024) out.append(line).append('\n')
-                    }
-                } catch (_: Exception) {
-                }
-            }
-            t.start()
-            val done = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-            if (!done) p.destroyForcibly()
-            t.join(1000)
-            return Triple(out.toString(), "", if (done) p.exitValue() else -1)
+        // 复用受控 root 执行器（terminal 包），root 命令统一走 RootExecutor.runSu
+        fun runRoot(command: String, timeoutMs: Long = 90_000): Triple<String, String, Int> {
+            val r = com.webreverse.mcp.mcp.tools.terminal.RootExecutor.runSu(command, timeoutMs)
+            return if (r != null) Triple(r.first, "", r.second)
+            else Triple("", "root unavailable", -1)
         }
 
         return listOf(
@@ -127,7 +71,7 @@ object FridaTools {
                             "hint",
                             JsonPrimitive(
                                 if (!suAvailable) "root(su) 不可用，frida 仅能非 root 模式。请确认 Magisk 已授权。"
-                                else if (!fridaBinExists) "frida-server 未安装：用 frida.install_server 下载适合本机 arm64 的 frida-server 并部署。"
+                                else if (!fridaBinExists) "frida-server 未安装：用 file 上传 frida-server arm64 二进制到 /data/local/tmp/frida-server，或用 frida.install_server 查看部署步骤。"
                                 else if (!fridaRunning) "frida-server 存在但未运行：用 frida.start_server 启动。"
                                 else "Frida 已就绪，可用 frida.list / frida.hook / frida.ssl_unpin。",
                             ),
@@ -237,24 +181,76 @@ object FridaTools {
             },
 
             f.tool(
-                "frida.install_server",
-                "下载并部署匹配本机架构(arm64)的 frida-server 到 /data/local/tmp/frida-server。后端以 root 执行。",
+                "frida.start_server",
+                "以 root 启动 frida-server（默认监听 127.0.0.1:27042）。会先 chmod +x 再后台启动，返回启动结果。frida-server 需已存在于 /data/local/tmp/frida-server（可用 upload 工具或 frida.status 检查）。启动后外部 frida 客户端可直接连本机 frida-server。",
                 ToolCategory.REVERSE,
                 PermissionScope.EXECUTE_JS,
                 RiskLevel.CRITICAL,
-                timeoutMs = 180_000,
+                timeoutMs = 60_000,
+                inputSchema = Schemas.objectSchema(
+                    "listen" to Schemas.strSchema("监听地址（默认 127.0.0.1:27042）"),
+                ),
+            ) { args ->
+                val listen = ToolArgs.str(args, "listen", "127.0.0.1:27042")
+                val cmd = "chmod 755 $FRIDA_SERVER_BIN && nohup $FRIDA_SERVER_BIN -l $listen >/dev/null 2>&1 & echo STARTED"
+                val result = withContext(Dispatchers.IO) {
+                    com.webreverse.mcp.mcp.tools.terminal.RootExecutor.runSu(cmd, 30_000)
+                }
+                if (result == null) {
+                    return@tool McpToolResult.error("ROOT_UNAVAILABLE", "root 不可用，无法启动 frida-server")
+                }
+                // 二次确认是否真跑起来了
+                val check = withContext(Dispatchers.IO) {
+                    com.webreverse.mcp.mcp.tools.terminal.RootExecutor.runSu("ps -A | grep frida", 10_000)
+                }
+                val running = check?.first?.contains("frida") == true
+                McpToolResult.json(
+                    buildJsonObject {
+                        put("started", JsonPrimitive(result.first.contains("STARTED")))
+                        put("running", JsonPrimitive(running))
+                        put("listen", JsonPrimitive(listen))
+                        put("output", JsonPrimitive(result.first.take(2000)))
+                    },
+                )
+            },
+
+            f.tool(
+                "frida.stop_server",
+                "停止 frida-server 进程（以 root 执行 pkill frida-server）。",
+                ToolCategory.REVERSE,
+                PermissionScope.EXECUTE_JS,
+                RiskLevel.CRITICAL,
+                timeoutMs = 30_000,
             ) { _ ->
-                // 仅部署说明 + 提示用户下载；真实下载二进制需联网获取版本，这里给出稳妥路径
+                val result = withContext(Dispatchers.IO) {
+                    com.webreverse.mcp.mcp.tools.terminal.RootExecutor.runSu("pkill -f frida-server 2>/dev/null; echo DONE", 15_000)
+                }
+                McpToolResult.json(
+                    buildJsonObject {
+                        put("stopped", JsonPrimitive(result?.first?.contains("DONE") == true))
+                        put("output", JsonPrimitive(result?.first?.take(1000) ?: "root unavailable"))
+                    },
+                )
+            },
+
+            f.tool(
+                "frida.install_server",
+                "部署说明 + 启动引导：frida-server 二进制需先上传到 /data/local/tmp/frida-server（可用本系统 file 上传或外部工具），然后用 frida.start_server 启动。本工具返回清晰步骤。",
+                ToolCategory.REVERSE,
+                PermissionScope.EXECUTE_JS,
+                RiskLevel.CRITICAL,
+                timeoutMs = 30_000,
+            ) { _ ->
                 McpToolResult.json(
                     buildJsonObject {
                         put(
                             "steps",
                             JsonPrimitive(
-                                "1) 在 Termux 执行: pip install frida-tools\n" +
-                                    "2) 下载与桌面 frida 同版本的 frida-server-<ver>-android-arm64 并改名:\n" +
-                                    "   adb push frida-server $FRIDA_SERVER_BIN\n" +
-                                    "3) 执行: su -c 'chmod +x $FRIDA_SERVER_BIN; $FRIDA_SERVER_BIN &'\n" +
-                                    "之后 frida.status 应显示 fridaServerRunning=true。",
+                                "1) 上传 frida-server（arm64）二进制到 $FRIDA_SERVER_BIN\n" +
+                                    "2) 调用 frida.start_server 启动（会自动 chmod +x 并后台运行，监听 127.0.0.1:27042）\n" +
+                                    "3) frida.status 确认 fridaServerRunning=true\n" +
+                                    "4) 外部 frida 客户端（电脑 frida-tools）用 frida -H <手机IP>:27042 连接；\n" +
+                                    "   或本机 terminal.su 直接执行 root 命令配合 hook。",
                             ),
                         )
                     },
