@@ -944,19 +944,26 @@ private fun NdkView(container: AppContainer) {
         when (ndkState) {
             is com.webreverse.mcp.mcp.tools.terminal.NdkState.NotInstalled,
             is com.webreverse.mcp.mcp.tools.terminal.NdkState.Failed -> {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            container.ndkDownloader.downloadAndExtract(
-                                container.ndkManager.availableVersions.first(),
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.Download, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (ndkState is com.webreverse.mcp.mcp.tools.terminal.NdkState.Failed) "重试下载并安装 NDK" else "下载并安装 NDK")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                container.ndkDownloader.downloadAndExtract(
+                                    container.ndkManager.availableVersions.first(),
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Download, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (ndkState is com.webreverse.mcp.mcp.tools.terminal.NdkState.Failed) "重试下载并安装 NDK" else "下载并安装 NDK")
+                    }
+                    OutlinedButton(
+                        onClick = { container.ndkManager.detectInstalled() },
+                    ) {
+                        Text("重新检测")
+                    }
                 }
             }
             is com.webreverse.mcp.mcp.tools.terminal.NdkState.Downloading,

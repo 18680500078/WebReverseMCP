@@ -33,22 +33,56 @@ object FridaTools {
     fun all(deps: ToolDependencies): List<McpTool> {
         val f = ToolFactory(deps)
 
-        fun runRoot(command: String, timeoutMs: Long = 90_000, preferRoot: Boolean = true): Triple<String, String, Int> {
-            // 用 su 执行命令；不检测文件存在性（Magisk 新版本 su 无独立文件），
-            // 而是直接尝试 su -c，失败/超时则回退 sh 非 root 执行。
-            val su = if (preferRoot) {
-                listOf("su", "-c", command)
-            } else {
-                listOf("/system/bin/sh", "-c", command)
+        // Magisk 新版本 su 无独立物理文件，且 app 进程 PATH 里往往没有 su，
+        // 需依次尝试多个已知路径；全部失败再回退非 root sh。
+        val SU_CANDIDATES = listOf(
+            "/data/adb/magisk/busybox",
+            "/sbin/su",
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/su/bin/su",
+            "su",
+        )
+
+        fun trySu(command: String, timeoutMs: Long): Triple<String, String, Int>? {
+            for (suPath in SU_CANDIDATES) {
+                val p = try {
+                    ProcessBuilder(suPath, "-c", command).redirectErrorStream(true).start()
+                } catch (_: Exception) {
+                    continue
+                }
+                val out = StringBuilder()
+                val reader = p.inputStream.bufferedReader()
+                val t = Thread {
+                    try {
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (out.length < 64 * 1024) out.append(line).append('\n')
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                t.start()
+                val done = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+                if (!done) { p.destroyForcibly(); t.join(500); continue }
+                t.join(500)
+                return Triple(out.toString(), "", p.exitValue())
             }
+            return null
+        }
+
+        fun runRoot(command: String, timeoutMs: Long = 90_000, preferRoot: Boolean = true): Triple<String, String, Int> {
+            // 先尝试 root(su)，失败/不可用则回退非 root sh
+            if (preferRoot) {
+                trySu(command, timeoutMs)?.let { return it }
+            }
+            val p = ProcessBuilder("/system/bin/sh", "-c", command).redirectErrorStream(true).start()
             val out = StringBuilder()
-            val err = StringBuilder()
-            val p = ProcessBuilder(su).redirectErrorStream(true).start()
-            val reader = p.inputStream.bufferedReader()
             val t = Thread {
                 try {
+                    val r = p.inputStream.bufferedReader()
                     while (true) {
-                        val line = reader.readLine() ?: break
+                        val line = r.readLine() ?: break
                         if (out.length < 64 * 1024) out.append(line).append('\n')
                     }
                 } catch (_: Exception) {
@@ -58,7 +92,7 @@ object FridaTools {
             val done = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
             if (!done) p.destroyForcibly()
             t.join(1000)
-            return Triple(out.toString(), err.toString(), if (done) p.exitValue() else -1)
+            return Triple(out.toString(), "", if (done) p.exitValue() else -1)
         }
 
         return listOf(

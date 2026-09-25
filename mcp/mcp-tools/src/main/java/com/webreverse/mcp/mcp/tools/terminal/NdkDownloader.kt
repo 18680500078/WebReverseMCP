@@ -170,15 +170,30 @@ class NdkDownloader(
 
             appendInstallLog("[解压] 流式解压完成")
 
-            // 解压完成，删除临时压缩包以节省空间
-            archiveFile.delete()
+            // 解压结果校验：防止解压中途异常被吞、留下空目录却被当作成功
+            val directProps = File(extractedDir, "source.properties")
+            val validRoot = if (directProps.exists()) {
+                extractedDir
+            } else {
+                extractedDir.listFiles()?.firstOrNull {
+                    it.isDirectory && File(it, "source.properties").exists()
+                }
+            }
+            if (validRoot == null) {
+                throw RuntimeException("解压完成但未找到 source.properties，NDK 产物不完整，请重试")
+            }
+            // 后续权限修复/工具链生成统一作用于真正的 NDK 根
+            val ndkRootForPostProcess = validRoot
+
+            // 解压完成，删除临时压缩包以节省空间（失败也不影响主流程）
+            runCatching { archiveFile.delete() }
 
             // ==================== 阶段三：权限与符号链接修复 ====================
             appendInstallLog("[权限配置] 开始配置可执行文件及符号链接包装权限...")
             ndkManager.setState(NdkState.Configuring(30, "修复符号链接与权限..."))
             try {
                 NdkPermissionHelper.makeToolchainExecutable(
-                    extractedDir,
+                    ndkRootForPostProcess,
                     object : NdkPermissionHelper.PermissionListener {
                         override fun onLog(message: String) {
                             appendInstallLog("[权限配置] $message")
@@ -203,9 +218,9 @@ class NdkDownloader(
                 appendInstallLog("[pip 工具链] 警告: 未能生成 pip 编译工具链（未找到 clang ELF）")
             }
 
-            appendInstallLog("[完成] NDK ${version.displayName} 安装成功: ${extractedDir.absolutePath}")
+            appendInstallLog("[完成] NDK ${version.displayName} 安装成功: ${ndkRootForPostProcess.absolutePath}")
 
-            Result.success(extractedDir)
+            Result.success(ndkRootForPostProcess)
         } catch (e: Exception) {
             // 取消或失败时清理半成品解压目录，避免残留占空间；
             // 下载临时文件保留——支持下次点击安装时断点续传，不重头下载。
@@ -272,20 +287,33 @@ class NdkDownloader(
                 FileOutputStream(archiveFile, resuming).use { output ->
                     val buffer = ByteArray(BUFFER_SIZE)
                     var received = alreadyReceived
+                    var lastEmitted = received
                     while (true) {
                         if (isCancelled) throw RuntimeException("下载已取消")
                         val n = input.read(buffer)
                         if (n <= 0) break
                         output.write(buffer, 0, n)
                         received += n
-                        val progress = if (totalBytes > 0) {
-                            (received * 100 / totalBytes).toInt().coerceIn(0, 100)
-                        } else {
-                            _downloadProgress.value
+                        // 进度节流：每读满 1MB 才更新一次，避免高频 StateFlow 更新
+                        if (received - lastEmitted >= 1024L * 1024L) {
+                            lastEmitted = received
+                            val progress = if (totalBytes > 0) {
+                                (received * 100 / totalBytes).toInt().coerceIn(0, 100)
+                            } else {
+                                _downloadProgress.value
+                            }
+                            _downloadProgress.value = progress
+                            ndkManager.setState(NdkState.Downloading(progress, received, totalBytes))
                         }
-                        _downloadProgress.value = progress
-                        ndkManager.setState(NdkState.Downloading(progress, received, totalBytes))
                     }
+                    // 结束兜底：确保最终进度 = 100
+                    val finalProgress = if (totalBytes > 0) {
+                        (received * 100 / totalBytes).toInt().coerceIn(0, 100)
+                    } else {
+                        100
+                    }
+                    _downloadProgress.value = finalProgress
+                    ndkManager.setState(NdkState.Downloading(finalProgress, received, totalBytes))
                 }
             }
 
@@ -508,22 +536,30 @@ class NdkDownloader(
         private val onRead: (Long) -> Unit,
     ) : InputStream() {
         private var totalRead = 0L
+        // 进度回调节流阈值：每累计读满 1MB 才回调一次，避免 8KB 就触发一次
+        // StateFlow 更新 + 对象创建（197MB 归档会导致 ~2.4 万次无谓更新，引发 UI 卡顿/ANR）
+        private var lastEmitted = 0L
+        private val emitStep = 1024L * 1024L
+
+        private fun notifyRead(n: Int) {
+            if (n > 0) {
+                totalRead += n
+                if (totalRead - lastEmitted >= emitStep) {
+                    lastEmitted = totalRead
+                    onRead(totalRead)
+                }
+            }
+        }
 
         override fun read(): Int {
             val b = source.read()
-            if (b != -1) {
-                totalRead++
-                onRead(totalRead)
-            }
+            if (b != -1) notifyRead(1)
             return b
         }
 
         override fun read(b: ByteArray, off: Int, len: Int): Int {
             val n = source.read(b, off, len)
-            if (n > 0) {
-                totalRead += n
-                onRead(totalRead)
-            }
+            notifyRead(n)
             return n
         }
 

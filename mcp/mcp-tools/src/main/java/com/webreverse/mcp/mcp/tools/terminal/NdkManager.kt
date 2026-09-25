@@ -82,7 +82,7 @@ class NdkManager {
                 "https://gh.jasonzeng.dev/https://github.com/HomuHomu833/android-ndk-custom/releases/download/r29/android-ndk-r29-aarch64-linux-android.tar.xz",
             ),
             archiveFormat = "tar.xz",
-            stripComponents = 0,
+            stripComponents = 1,
             sizeBytes = 0,
             isRecommended = true,
         ),
@@ -121,35 +121,33 @@ class NdkManager {
         val rootDir = TerminalPaths.ndkRootDir
         if (!rootDir.isDirectory) return result
 
-        rootDir.listFiles()?.filter { it.isDirectory && it.name != "pip-bin" }?.forEach { subDir ->
-            // 布局 1：source.properties 直接在子目录层
-            detectNdkInDir(subDir)?.let { ndk ->
-                result.add(
-                    InstalledNdk(
-                        dirName = subDir.name,
-                        ndkPath = ndk.first,
-                        version = ndk.second,
-                        binDir = binDirOf(ndk.first),
-                        isActive = ndk.first.absolutePath == activePath,
-                    ),
-                )
-                return@forEach
-            }
-            // 布局 2：子目录内还有一层归档顶层目录
-            subDir.listFiles()?.filter { it.isDirectory }?.forEach { inner ->
-                detectNdkInDir(inner)?.let { ndk ->
-                    result.add(
-                        InstalledNdk(
-                            dirName = subDir.name,
-                            ndkPath = ndk.first,
-                            version = ndk.second,
-                            binDir = binDirOf(ndk.first),
-                            isActive = ndk.first.absolutePath == activePath,
-                        ),
-                    )
+        // 递归查找所有含 source.properties 且 bin 目录存在的 NDK 根（兼容任意层级，
+        // 修复：r29 tar.xz stripComponents=0 解压后目录层级比一层/两层更深，导致
+        // 界面重启后 detectInstalled 扫描不到、回退 NotInstalled 的「安装完仍显示要安装」bug）
+        val seen = mutableSetOf<String>()
+        fun walk(dir: File, depth: Int) {
+            if (depth > 6) return
+            dir.listFiles()?.forEach { f ->
+                if (f.isDirectory && f.name != "pip-bin") {
+                    detectNdkInDir(f)?.let { ndk ->
+                        val key = ndk.first.absolutePath
+                        if (seen.add(key)) {
+                            result.add(
+                                InstalledNdk(
+                                    dirName = f.name,
+                                    ndkPath = ndk.first,
+                                    version = ndk.second,
+                                    binDir = binDirOf(ndk.first),
+                                    isActive = key == activePath,
+                                ),
+                            )
+                        }
+                    }
+                    walk(f, depth + 1)
                 }
             }
         }
+        walk(rootDir, 0)
         return result.sortedBy { it.dirName }
     }
 

@@ -58,6 +58,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.webreverse.mcp.util.RootHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -97,6 +101,10 @@ fun SettingsScreen(
     var redactionEnabled by remember { mutableStateOf(Redactor.enabled) }
     // MCP 工具暴露模式（聚合枢纽 / 全量），用户手动开关
     var hubCompact by remember { mutableStateOf(com.webreverse.mcp.settings.ToolModePrefs.isCompact(context)) }
+    // root 权限状态（Magisk）
+    var rootAvailable by remember { mutableStateOf(false) }
+    var rootChecking by remember { mutableStateOf(false) }
+    var rootMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     fun refreshStates() {
@@ -109,6 +117,10 @@ fun SettingsScreen(
         workDirWritable = WorkDir.isWritable()
         redactionEnabled = Redactor.enabled
         KeepAliveService.refresh(context)
+        // 异步检测 root（避免阻塞 UI）
+        scope.launch {
+            withContext(Dispatchers.IO) { RootHelper.isRootAvailable() }.let { rootAvailable = it }
+        }
     }
 
     // 从系统设置页返回时刷新权限状态并刷新悬浮球
@@ -425,6 +437,66 @@ fun SettingsScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(8.dp)) {
+                        ListItem(
+                            headlineContent = { Text("Root 权限（Magisk）") },
+                            supportingContent = {
+                                Text(
+                                    when {
+                                        rootChecking -> "正在检测 root 环境…"
+                                        rootAvailable -> "已授权：可执行 su 命令（Frida 动态 hook 等能力可用）"
+                                        else -> "未授权：Frida 高级能力受限。点击「拉起授权」触发 Magisk 授权弹窗"
+                                    },
+                                )
+                            },
+                            leadingContent = {
+                                Icon(Icons.Filled.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            },
+                            trailingContent = {
+                                when {
+                                    rootChecking -> {
+                                        // 检测中：无按钮，仅提示
+                                    }
+                                    rootAvailable -> {
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    rootChecking = true
+                                                    withContext(Dispatchers.IO) { RootHelper.requestRoot() }
+                                                    rootChecking = false
+                                                }
+                                            },
+                                        ) {
+                                            Text("重新检测")
+                                        }
+                                    }
+                                    else -> {
+                                        Button(
+                                            onClick = {
+                                                scope.launch {
+                                                    rootChecking = true
+                                                    rootMessage = null
+                                                    val ok = withContext(Dispatchers.IO) { RootHelper.requestRoot() }
+                                                    rootAvailable = ok
+                                                    rootChecking = false
+                                                    rootMessage = if (ok) "root 授权成功" else "未获得 root：请确认 Magisk 已安装，并在弹窗中点击「允许」"
+                                                }
+                                            },
+                                        ) {
+                                            Text("拉起授权")
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                        rootMessage?.let { msg ->
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, top = 4.dp),
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         ListItem(
                             headlineContent = { Text("所有文件管理权限") },
                             supportingContent = {
