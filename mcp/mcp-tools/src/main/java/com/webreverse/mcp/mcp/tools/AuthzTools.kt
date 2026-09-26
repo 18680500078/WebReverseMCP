@@ -129,7 +129,8 @@ object AuthzTools {
                         "逗号分隔的已捕获请求 ID（network.list 的 id），以其 url/method/headers/body 作为目标",
                     ),
                     "targetParams" to Schemas.strSchema(
-                        "要替换的参数名，逗号分隔（如 id,uid,orderId）。留空则只测原始请求",
+                        "要替换的参数名，逗号分隔（如 id,uid,orderId）。URL 里可写 {id} 占位符；" +
+                            "未写占位时会依次尝试 query 参数、路径末段(纯数字/UUID)。留空则只测原始请求",
                     ),
                     "values" to Schemas.strSchema(
                         "参数候选值，逗号分隔（如 1001,1002）。留空则只测原始值",
@@ -221,7 +222,7 @@ object AuthzTools {
             } else {
                 for (v in values) {
                     var u = t.url
-                    for (p in targetParams) u = substituteQuery(u, p, v)
+                    for (p in targetParams) u = substituteUrl(u, p, v)
                     val rawBody = t.body
                     val srcBody: String = rawBody ?: ""
                     val b: String? = if (rawBody == null) {
@@ -627,6 +628,44 @@ object AuthzTools {
         }
         return if (!hit) url else head + "?" + rebuilt + frag
     }
+
+    /**
+     * URL 参数替换（三级策略）：
+     * 1) 显式占位符 {param}（最精确，REST 路径推荐）
+     * 2) query 参数（?id=xxx）
+     * 3) 路径末段兜底：最后一段是「纯数字」或「UUID」时替换（REST 风格 /api/user/1001）
+     */
+    private fun substituteUrl(url: String, param: String, value: String): String {
+        val ph = "{" + param + "}"
+        if (url.contains(ph)) return url.replace(ph, value)
+        val q = substituteQuery(url, param, value)
+        if (q != url) return q
+        return substitutePathTail(url, value)
+    }
+
+    private fun substitutePathTail(url: String, value: String): String {
+        val qIdx = url.indexOf('?')
+        val head = if (qIdx >= 0) url.substring(0, qIdx) else url
+        val tail = if (qIdx >= 0) url.substring(qIdx) else ""
+        val schemeEnd = head.indexOf("://")
+        val pathStart = if (schemeEnd >= 0) head.indexOf('/', schemeEnd + 3) else 0
+        if (pathStart < 0) return url
+        val origin = head.substring(0, pathStart)
+        val path = head.substring(pathStart)
+        val segs = path.split('/').toMutableList()
+        for (i in segs.indices.reversed()) {
+            val s = segs[i]
+            if (s.isNotEmpty() && (s.all { it.isDigit() } || looksLikeUuid(s))) {
+                segs[i] = value
+                return origin + segs.joinToString("/") + tail
+            }
+        }
+        return url
+    }
+
+    private fun looksLikeUuid(s: String): Boolean =
+        s.length == 36 && s.count { it == '-' } == 4 &&
+            s.replace("-", "").all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }
 
     private fun substituteBody(body: String, param: String, value: String): String {
         val jsonRe = Regex("\"(" + Regex.escape(param) + ")\"\\s*:\\s*(\"[^\"]*\"|[^,}\\s]+)")
