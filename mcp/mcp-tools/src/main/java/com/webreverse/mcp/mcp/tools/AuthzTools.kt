@@ -222,11 +222,12 @@ object AuthzTools {
                 for (v in values) {
                     var u = t.url
                     for (p in targetParams) u = substituteQuery(u, p, v)
-                    val b0 = t.body
-                    val b: String? = if (b0 == null) {
+                    val rawBody = t.body
+                    val srcBody: String = rawBody ?: ""
+                    val b: String? = if (rawBody == null) {
                         null
                     } else {
-                        var tmp = b0
+                        var tmp: String = srcBody
                         for (p in targetParams) tmp = substituteBody(tmp, p, v)
                         tmp
                     }
