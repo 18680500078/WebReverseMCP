@@ -74,6 +74,8 @@ object ToolModule {
         registry.registerAll(FridaTools.all(deps))
         // 网页渗透工具集（JWT 解析/伪造 + 接口参数重放/越权探测）
         registry.registerAll(WebPentestTools.all(deps))
+        // 越权/IDOR 矩阵引擎（authz.matrix：多身份 × 多资源 交叉重放 + 相似度判定）
+        registry.registerAll(AuthzTools.all(deps))
         // 逆向案例导出与复现（case.export）
         registry.registerAll(CaseTools.all(deps))
         // 浏览器指纹反检测（fingerprint.status / fingerprint.noise）
